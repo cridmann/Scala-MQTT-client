@@ -26,7 +26,7 @@ class LocalSubscriber(topics: Vector[String]) extends Actor {
 
   val stopTopic: String = s"$localSubscriber/stop"
 
-  context.actorOf(Manager.props(new InetSocketAddress(1883))) ! Connect(localSubscriber)
+  context.actorOf(Manager.props(new InetSocketAddress("192.168.1.217", 1883))) ! Connect(localSubscriber)
 
   def receive: Receive = {
     case Connected ⇒
