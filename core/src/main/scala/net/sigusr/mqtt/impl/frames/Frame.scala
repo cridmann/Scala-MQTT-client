@@ -50,6 +50,12 @@ case class PingReqFrame(header: Header) extends Frame
 case class PingRespFrame(header: Header) extends Frame
 case class DisconnectFrame(header: Header) extends Frame
 
+case class PartialFrame(discriminator: Int, header: Header, remainingLength: Int, payload: ByteVector)
+
+object PartialFrame {
+  implicit val codec: Codec[PartialFrame] = (uint(4) :: headerCodec :: remainingLengthCodec :: bytes).dropUnits.as[PartialFrame]
+}
+
 object Frame {
   implicit val discriminated: Discriminated[Frame, Int] = Discriminated(uint4)
   implicit val frameCodec = Codec.coproduct[Frame].auto

@@ -2,7 +2,8 @@ package net.sigusr.mqtt.impl.protocol
 
 import akka.actor.{ Actor, ActorContext, ActorRef, Cancellable }
 import net.sigusr.mqtt.api._
-import net.sigusr.mqtt.impl.frames.Frame
+import net.sigusr.mqtt.impl.frames.{PartialFrame, Frame}
+import scodec.bits.BitVector
 
 import scala.collection.immutable.{ TreeMap, TreeSet }
 
@@ -14,7 +15,8 @@ case class Registers(
     client: ActorRef = null,
     inFlightSentFrame: TreeMap[Int, Frame] = TreeMap.empty[Int, Frame],
     inFlightRecvFrame: TreeSet[Int] = TreeSet.empty[Int],
-    tcpManager: ActorRef = null) {
+    tcpManager: ActorRef = null,
+    readBuffer: Option[(PartialFrame, BitVector)] = None) {
 }
 
 object Registers {
@@ -66,4 +68,7 @@ object Registers {
   def watchTcpManager(implicit context: ActorContext) = gets[Registers, ActorRef](context watch _.tcpManager)
 
   def unwatchTcpManager(implicit context: ActorContext) = gets[Registers, ActorRef](context unwatch _.tcpManager)
+
+  def setReadBuffer(rb: Option[(PartialFrame, BitVector)]) = modify[Registers](_.copy(readBuffer = rb))
+
 }

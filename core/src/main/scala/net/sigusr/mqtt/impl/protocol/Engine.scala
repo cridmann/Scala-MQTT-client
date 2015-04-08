@@ -22,7 +22,7 @@ import akka.actor.{ Actor, ActorLogging, ActorRef, Terminated }
 import akka.event.LoggingReceive
 import akka.util.ByteString
 import net.sigusr.mqtt.api._
-import net.sigusr.mqtt.impl.frames.Frame
+import net.sigusr.mqtt.impl.frames.{PartialFrame, Frame}
 import net.sigusr.mqtt.impl.protocol.Registers._
 import scodec.Codec
 import scodec.bits.BitVector
@@ -78,6 +78,35 @@ abstract class Engine(mqttBrokerAddress: InetSocketAddress) extends Actor with H
       context become connected
   }
 
+  def decodePartialFrame(bitVector: BitVector): Unit = {
+    Codec[PartialFrame].decode(bitVector).fold[Unit](fail => {
+      log.error(s"$self - Failed decoding partial frame.  Disconnecting client.")
+      disconnect()
+    }, par => {
+      if (par.value.payload.size != par.value.remainingLength) {
+        registers = (for {
+          _ <- setReadBuffer(Some((par.value, bitVector)))
+        } yield ()).exec(registers)
+      } else {
+        decodeCompleteFrame(bitVector)
+      }
+    })
+  }
+
+  def decodeCompleteFrame(bitVector: BitVector): Unit = {
+    Codec[Frame].decode(bitVector).fold[Unit](
+    { err ⇒
+      log.error(s"$self - Failed decoding frame.  Disconnecting client.")
+      disconnect()
+    }, { d ⇒
+        registers = (for {
+          actions ← handleNetworkFrames(d.value)
+          _ ← processAction(actions)
+          _ <- setReadBuffer(None)
+        } yield ()).exec(registers)
+    })
+  }
+
   private def connected: Receive = LoggingReceive {
     case message: APICommand ⇒
       registers = (for {
@@ -91,14 +120,31 @@ abstract class Engine(mqttBrokerAddress: InetSocketAddress) extends Actor with H
       } yield ()).exec(registers)
     case TcpReceived(encodedResponse) ⇒
       val bitVector = BitVector.view(encodedResponse.toArray)
-      Codec[Frame].decode(bitVector).fold[Unit](
-        { _ ⇒ disconnect() }, {
-          d ⇒
+      registers.readBuffer.fold[Unit](
+        // attempt to decode
+          // if successful, call actions
+          // if partial, build buffer
+        decodePartialFrame(bitVector)
+      ) {
+        case (parBuffer, bufferVector) =>
+          // check if bitVector.size + par.payload.size == par.remainingLength
+            // if successful, decode payload and call actions
+            // if partial, copy buffer with bitVector added to payload
+            // if greater, then call actions and store new readBuffer
+          if (parBuffer.payload.size + bitVector.toByteVector.size == parBuffer.remainingLength) {
+            val completeBitVector = bufferVector ++ bitVector
+            decodeCompleteFrame(completeBitVector)
+          } else if (parBuffer.payload.size + bitVector.toByteVector.size < parBuffer.remainingLength) {
             registers = (for {
-              actions ← handleNetworkFrames(d.value)
-              _ ← processAction(actions)
+              _ <- setReadBuffer(Some((parBuffer.copy(payload = parBuffer.payload ++ bitVector.toByteVector), bufferVector ++ bitVector)))
             } yield ()).exec(registers)
-        })
+          } else if (parBuffer.payload.size + bitVector.toByteVector.size > parBuffer.remainingLength) {
+            val (completedBytes, leftOver) = bitVector.splitAt((parBuffer.remainingLength - parBuffer.payload.size).toLong)
+            val completeBitVector = bufferVector ++ completedBytes
+            decodeCompleteFrame(completeBitVector)
+            decodePartialFrame(leftOver)
+          }
+      }
     case Terminated(_) | _: TcpConnectionClosed ⇒
       disconnect()
   }
